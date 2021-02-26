@@ -88,9 +88,11 @@ static void shader_check_for_changes(Shader *shader) {
 }
 
 static double start_time;
+static float window_width, window_height;
 
 static void shader_draw(Shader *shader, Rect where) {
 	shader_check_for_changes(shader);
+	if (!shader->program) return;
 	float x1, y1, x2, y2;
 	rect_coords(where, &x1, &y1, &x2, &y2);
 	
@@ -132,6 +134,9 @@ static void shader_draw(Shader *shader, Rect where) {
 	GLint u_time = gl_uniform_loc(shader->program, "u_time");
 	if (u_time >= 0)
 		glUniform1f(u_time, (float)fmod(time_get_seconds() - start_time, 10000));
+	GLint u_aspect_ratio = gl_uniform_loc(shader->program, "u_aspect_ratio");
+	if (u_aspect_ratio >= 0)
+		glUniform1f(u_aspect_ratio, window_width / window_height);
 	glDrawArrays(GL_TRIANGLES, 0, 6);	
 }
 
@@ -241,9 +246,12 @@ int main(void) {
 	bool quit = false, fullscreen = false;
 	start_time = time_get_seconds();
 	while (!quit) {
+	int iwindow_width, iwindow_height;
+		SDL_GetWindowSize(window, &iwindow_width, &iwindow_height);
+		window_width = (float)iwindow_width;
+		window_height = (float)iwindow_height;
+		
 		SDL_Event event = {0};
-		int window_width, window_height;
-		SDL_GetWindowSize(window, &window_width, &window_height);
 		v2 *mouse_clicks = NULL;
 		while (SDL_PollEvent(&event)) {
 			switch (event.type) {
@@ -251,8 +259,8 @@ int main(void) {
 				quit = true;
 				break;
 			case SDL_MOUSEBUTTONDOWN: {
-				float x = -1 + 2 * (float)event.button.x / (float)window_width;
-				float y = +1 - 2 * (float)event.button.y / (float)window_height;
+				float x = -1 + 2 * (float)event.button.x / window_width;
+				float y = +1 - 2 * (float)event.button.y / window_height;
 				arr_add(mouse_clicks, V2(x, y));
 			} break;
 			case SDL_KEYDOWN:

@@ -131,7 +131,7 @@ static GLuint gl_compile_and_link_shaders(char const *vshader_code, char const *
 static GLuint gl_attrib_loc(GLuint program, char const *attrib) {
 	GLint loc = glGetAttribLocation(program, attrib);
 	if (loc == -1) {
-		debug_print("Couldn't find vertex attribute %s.\n", attrib);
+		//debug_print("Couldn't find vertex attribute %s.\n", attrib);
 		return (GLuint)-1;
 	}
 	return (GLuint)loc;
@@ -140,7 +140,7 @@ static GLuint gl_attrib_loc(GLuint program, char const *attrib) {
 static GLint gl_uniform_loc(GLuint program, char const *uniform) {
 	GLint loc = glGetUniformLocation(program, uniform);
 	if (loc == -1) {
-		debug_print("Couldn't find uniform: %s.\n", uniform);
+		//debug_print("Couldn't find uniform: %s.\n", uniform);
 		return -1;
 	}
 	return loc;
