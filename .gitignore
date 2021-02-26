@@ -1,0 +1,16 @@
+*~
+*.swp
+tags
+TAGS
+*.o
+*.obj
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.res
+*.zip
+*.a
+SDL2
+shaders
