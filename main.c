@@ -9,9 +9,15 @@
 #include "gl.c"
 #include "time.c"
 #include "util.c"
+#if _WIN32
+#include "filesystem-win.c"
+#else
+#include "filesystem-posix.c"
+#endif
 
 typedef struct {
 	GLuint program;
+	GLuint vbo, vao;
 	struct timespec last_modified;
 	char vfilename[64], ffilename[64];
 } Shader;
@@ -43,9 +49,21 @@ static void shader_load(Shader *shader, char const *vfilename, char const *ffile
 				fread(vcode, 1, vsize, vfp);
 				fread(fcode, 1, fsize, ffp);
 				
+				
 				GLuint program = gl_compile_and_link_shaders(vcode, fcode);
-				if (program)
+				if (program) {
 					shader->program = program;
+					if (shader->vbo) glDeleteBuffers(1, &shader->vbo);
+					if (shader->vao) glDeleteVertexArrays(1, &shader->vao);
+					GLuint vbo = 0;
+					glGenBuffers(1, &vbo);
+					GLuint vao = 0;
+					if (gl_version_major >= 3)
+						glGenVertexArrays(1, &vao);
+					
+					shader->vbo = vbo;
+					shader->vao = vao;
+				}
 			} else print("Out of memory.\n");
 			free(vcode); free(fcode);
 		} else {
@@ -67,6 +85,54 @@ static void shader_check_for_changes(Shader *shader) {
 		if (shader->program != prev_program)
 			glDeleteProgram(prev_program);
 	}
+}
+
+static double start_time;
+
+static void shader_draw(Shader *shader, Rect where) {
+	shader_check_for_changes(shader);
+	float x1, y1, x2, y2;
+	rect_coords(where, &x1, &y1, &x2, &y2);
+	
+	if (shader->vao)
+		glBindVertexArray(shader->vao);
+	glBindBuffer(GL_ARRAY_BUFFER, shader->vbo);
+	v2 buffer_data[] = {
+		// gl coordinates (v_render_pos)
+		{x1, y1},
+		{x2, y1},
+		{x1, y2},
+		
+		{x2, y1},
+		{x2, y2},
+		{x1, y2},
+		
+		// normalized coordinates (v_pos)
+		{0, 0},
+		{1, 0},
+		{0, 1},
+		
+		{1, 0},
+		{1, 1},
+		{0, 1},
+	};
+	
+	glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof buffer_data, buffer_data, GL_STATIC_DRAW);
+	GLuint v_render_pos = gl_attrib_loc(shader->program, "v_render_pos");
+	GLuint v_pos = gl_attrib_loc(shader->program, "v_pos");
+	if (v_render_pos != (GLuint)-1) {
+		glVertexAttribPointer(v_render_pos,	2, GL_FLOAT, 0, sizeof(v2), NULL);
+		glEnableVertexAttribArray(v_render_pos);
+	}
+	if (v_pos != (GLuint)-1) {
+		glVertexAttribPointer(v_pos, 2, GL_FLOAT, 0, sizeof(v2), (void *)(6 * sizeof(v2)));
+		glEnableVertexAttribArray(v_pos);
+	}
+	glUseProgram(shader->program);
+	GLint u_time = gl_uniform_loc(shader->program, "u_time");
+	if (u_time >= 0)
+		glUniform1f(u_time, (float)fmod(time_get_seconds() - start_time, 10000));
+	glDrawArrays(GL_TRIANGLES, 0, 6);	
 }
 
 static void die(char const *fmt, ...) {
@@ -142,63 +208,70 @@ int main(void) {
 	
 	SDL_GL_SetSwapInterval(1); // vsync
 	
-	Shader shader = {0};
-	shader_load(&shader, "1v.glsl", "1f.glsl");
+	Shader *shaders = NULL;
 	
-	GLuint vbo = 0;
-	glGenBuffers(1, &vbo);
-	GLuint vao = 0;
-	if (gl_version_major >= 3)
-		glGenVertexArrays(1, &vao);
-		
-	v2 buffer_data[] = {
-		// gl coordinates (v_render_pos)
-		{-1, -1},
-		{+1, -1},
-		{-1, +1},
-		
-		{+1, -1},
-		{+1, +1},
-		{-1, +1},
-		
-		// normalized coordinates (v_pos)
-		{0, 0},
-		{1, 0},
-		{0, 1},
-		
-		{1, 0},
-		{1, 1},
-		{0, 1},
-	};
+	char **files = fs_list_directory(".");
+	size_t nfiles; for (nfiles = 0; files[nfiles]; ++nfiles);
+	qsort(files, nfiles, sizeof *files, str_qsort_case_insensitive_cmp);
 	
-	if (vao) glBindVertexArray(vao);
-	glBindBuffer(GL_ARRAY_BUFFER, vbo);
-	glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)sizeof buffer_data, buffer_data, GL_STATIC_DRAW);
-	GLuint v_render_pos = gl_attrib_loc(shader.program, "v_render_pos");
-	GLuint v_pos = gl_attrib_loc(shader.program, "v_pos");
-	if (v_render_pos != (GLuint)-1) {
-		glVertexAttribPointer(v_render_pos,	2, GL_FLOAT, 0, sizeof(v2), NULL);
-		glEnableVertexAttribArray(v_render_pos);
-	}
-	if (v_pos != (GLuint)-1) {
-		glVertexAttribPointer(v_pos, 2, GL_FLOAT, 0, sizeof(v2), (void *)(6 * sizeof(v2)));
-		glEnableVertexAttribArray(v_pos);
+	u16 nshaders = 0;
+	for (size_t i = 0; i < nfiles; ++i) {
+		nshaders += str_is_suffix(files[i], "v.glsl");
 	}
 	
-	bool quit = false;
-	double start = time_get_seconds();
+	u16 shader_idx = 0;
+	for (size_t i = 0; i < nfiles; ++i) {
+		if (str_is_suffix(files[i], "v.glsl")) {
+			char const *vfilename = files[i];
+			char ffilename[64];
+			strbuf_cpy(ffilename, vfilename);
+			ffilename[strlen(ffilename) - 6] = 'f';
+			Shader shader = {0};
+			shader_load(&shader, vfilename, ffilename);
+			arr_add(shaders, shader);
+			++shader_idx;
+		}
+		free(files[i]);
+	}
+	
+	i32 viewing_shader = -1;
+	
+	free(files);
+	
+	bool quit = false, fullscreen = false;
+	start_time = time_get_seconds();
 	while (!quit) {
 		SDL_Event event = {0};
+		int window_width, window_height;
+		SDL_GetWindowSize(window, &window_width, &window_height);
+		v2 *mouse_clicks = NULL;
 		while (SDL_PollEvent(&event)) {
 			switch (event.type) {
 			case SDL_QUIT:
 				quit = true;
 				break;
+			case SDL_MOUSEBUTTONDOWN: {
+				float x = -1 + 2 * (float)event.button.x / (float)window_width;
+				float y = +1 - 2 * (float)event.button.y / (float)window_height;
+				arr_add(mouse_clicks, V2(x, y));
+			} break;
+			case SDL_KEYDOWN:
+				switch (event.key.keysym.sym) {
+				case SDLK_ESCAPE:
+					if (viewing_shader == -1)
+						quit = true;
+					else
+						viewing_shader = -1;
+					break;
+				case SDLK_F11:
+					fullscreen = !fullscreen;
+					SDL_SetWindowFullscreen(window, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+					break;
+				}
+				break;
 			}
 		}
 		
-		int window_width, window_height;
-		SDL_GetWindowSize(window, &window_width, &window_height);
 		
 		// set up GL
 		glEnable(GL_BLEND);
@@ -207,18 +280,32 @@ int main(void) {
 		glClearColor(0, 0, 0, 1);
 		glClear(GL_COLOR_BUFFER_BIT);
 		
-		shader_check_for_changes(&shader);
-		
-		if (shader.program) {
-			if (vao) glBindVertexArray(vao);
-			glBindBuffer(GL_ARRAY_BUFFER, vbo);
-			glUseProgram(shader.program);
-			GLint u_time = gl_uniform_loc(shader.program, "u_time");
-			if (u_time >= 0)
-				glUniform1f(u_time, (float)fmod(time_get_seconds() - start, 10000));
-			glDrawArrays(GL_TRIANGLES, 0, 6);
+		if (viewing_shader >= 0) {
+			// one shader
+			Shader *shader = &shaders[viewing_shader];
+			shader_draw(shader, rect4(-1, -1, +1, +1));
+		} else {
+			// shader gallery
+			u16 idx = 0;
+			float w = 2 * 1.0f / 6;
+			float h = 2 * 1.0f / ((nshaders + 5) / 6);
+			h = minf(h, 1.0f / 3);
+			arr_foreach_ptr(shaders, Shader, shader) {
+				float x1 = -1 + (idx % 6) * w;
+				float y1 = 1 - h - (idx / 6) * h;
+				Rect r = rect(V2(x1, y1), V2(w, h));
+				r = rect_shrink(r, 0.02f);
+				arr_foreach_ptr(mouse_clicks, v2, click) {
+					if (rect_contains_point(r, *click))
+						viewing_shader = idx;
+				}
+				shader_draw(shader, r);
+				++idx;
+			}
 		}
 		
+		
+		arr_clear(mouse_clicks);
 		SDL_GL_SwapWindow(window);
 	}
 	

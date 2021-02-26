@@ -61,6 +61,13 @@ static bool str_is_prefix(char const *str, char const *prefix) {
 	return strncmp(str, prefix, strlen(prefix)) == 0;
 }
 
+static bool str_is_suffix(char const *str, char const *suffix) {
+	size_t str_len = strlen(str);
+	size_t suf_len = strlen(suffix);
+	if (str_len < suf_len) return false;
+	return memcmp(str + str_len - suf_len, suffix, suf_len) == 0;
+}
+
 static bool streq(char const *a, char const *b) {
 	return strcmp(a, b) == 0;
 }
