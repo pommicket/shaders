@@ -271,6 +271,9 @@ int main(void) {
 					else
 						viewing_shader = -1;
 					break;
+				case SDLK_r:
+					start_time = time_get_seconds();
+					break;
 				case SDLK_F11:
 					fullscreen = !fullscreen;
 					SDL_SetWindowFullscreen(window, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
